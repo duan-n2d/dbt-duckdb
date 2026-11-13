@@ -157,6 +157,40 @@ class DuckDBAdapter(SQLAdapter):
                 return []
             raise
 
+    def _make_match(
+        self,
+        relations_list: List[BaseRelation],
+        database: str,
+        schema: str,
+        identifier: str,
+    ) -> List[BaseRelation]:
+        # DuckDB keeps the case of unquoted identifiers in its catalog but resolves
+        # them case-insensitively, while dbt lowercases the unquoted parts of the name
+        # it searches for. Compare those parts case-insensitively so a relation created
+        # as "MODEL" is found again on the next run instead of raising an approximate
+        # match error (see issue #905). Quoted parts keep dbt's default behavior.
+        search = self._make_match_kwargs(database, schema, identifier)
+        quoting = self.config.quoting
+        matches = []
+        for relation in relations_list:
+            if all(
+                self._relation_part_matches(relation, part, value, quoting.get(part) is False)
+                for part, value in search.items()
+            ) or relation.matches(**search):
+                matches.append(relation)
+        return matches
+
+    @staticmethod
+    def _relation_part_matches(
+        relation: BaseRelation, part: str, value: str, case_insensitive: bool
+    ) -> bool:
+        actual = getattr(relation, part)
+        if actual is None:
+            return False
+        if case_insensitive:
+            return actual.lower() == value.lower()
+        return actual == value
+
     @available
     def parse_index(self, raw_index: Any) -> Optional[DuckDBIndexConfig]:
         return DuckDBIndexConfig.parse(raw_index)
